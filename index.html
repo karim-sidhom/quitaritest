@@ -70,6 +70,23 @@ body.alarm #liveBadge{ color:#fff; }
 }
 .stop-pos .stop-time{ color:#ff4d4d !important; }
 @keyframes posPulse{ 0%,100%{opacity:1;} 50%{opacity:.6;} }
+#safeMsg{
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; margin-top:2vh; padding:3vh 4vw;
+  border:1px solid rgba(120,255,170,.3); border-radius:16px;
+  background:rgba(30,200,120,.08);
+}
+#safeMsg.show{ display:flex; }
+#safeMsg .safeDist{
+  font-family:'Amiri',serif; font-size:9vw; color:#7CFFB2;
+  text-shadow:0 0 20px rgba(124,255,178,.35);
+}
+#safeMsg .safeLine{
+  font-size:4.4vw; font-weight:700; color:#7CFFB2; margin-top:1.4vh;
+}
+#safeMsg .safeSub{
+  font-size:3.4vw; color:#c7cbe0; margin-top:.6vh; opacity:.85;
+}
 </style>
 </head>
 <body>
@@ -78,6 +95,11 @@ body.alarm #liveBadge{ color:#fff; }
     <div id="timeOfficial">--:--</div>
     <div id="timeLive"></div>
     <div id="liveBadge"></div>
+    <div id="safeMsg">
+      <div class="safeDist" id="safeDist">--</div>
+      <div class="safeLine" id="safeLine1">أنت في أمان 🚈</div>
+      <div class="safeSub" id="safeLine2">القطارات لا تطير</div>
+    </div>
     <div id="stopsList"></div>
   </div>
 
@@ -555,7 +577,7 @@ const DEFAULT_TRAINS = [
 let trains = DEFAULT_TRAINS.map(t=>({...t}));
 let lastPos = null;
 const RISK_THRESHOLD_M = 150;   // نفس عتبة الخطر المستعملة في محرك قِطاري الرئيسي (150م = 100%)
-const ZONE_RADIUS_M = 800;      // نطاق ثابت (بلا أي إعداد ظاهر — التطبيق تلقائي 100%)
+const ZONE_RADIUS_M = 1000;     // نطاق ثابت 1 كم (بلا أي إعداد ظاهر — التطبيق تلقائي 100%)
 const ALARM_RISK_THRESHOLD = 80; // العتبة التي تُطلق الصفارة (غير مستعملة الآن للصفارة، محفوظة للعرض)
 let alertActive = false;
 let lockedTrain = null; // القطار المثبّت على الشاشة حتى يصل فعلياً إلى المحطة التالية بعد موقعك
@@ -692,6 +714,15 @@ function computeZoneEvents(userPos, zoneRadiusM){
   events.sort((a,b)=>a.timeMin-b.timeMin);
   return events;
 }
+// أقرب مسافة إلى أي سكة حديدية (بصرف النظر عن نطاق البحث) — تُستعمل لعرض رسالة الأمان
+function nearestRailDistanceM(userPos){
+  let best = null;
+  trains.forEach(train=>{
+    const ca = trainClosestApproach(userPos, train);
+    if(ca && (best===null || ca.dist<best)) best = ca.dist;
+  });
+  return best;
+}
 // الخطر الحقيقي الآن يعتمد على القرب الزمني من لحظة المرور أيضاً، لا على المسافة فقط
 const RISK_TIME_IMMINENT_MIN = 15;
 const RISK_TIME_HORIZON_MIN = 180;
@@ -798,6 +829,24 @@ function getEffectiveTimeMin(train, timeMinRaw){
   return (((timeMinRaw + delay) % 1440) + 1440) % 1440;
 }
 
+function showSafeMessage(userPos){
+  const el = document.getElementById('safeMsg');
+  const elDist = document.getElementById('safeDist');
+  if(!el || !elDist) return;
+  const distM = nearestRailDistanceM(userPos);
+  if(distM===null){
+    el.classList.remove('show');
+    return;
+  }
+  const km = (distM/1000).toFixed(distM<10000?1:0);
+  elDist.textContent = km + ' كم';
+  el.classList.add('show');
+}
+function hideSafeMessage(){
+  const el = document.getElementById('safeMsg');
+  if(el) el.classList.remove('show');
+}
+
 function computeAndRender(){
   const elName = document.getElementById('trainName');
   const elOfficial = document.getElementById('timeOfficial');
@@ -806,7 +855,7 @@ function computeAndRender(){
   if(!lastPos){
     elName.textContent=''; elOfficial.textContent='--:--'; elLive.textContent='';
     if(elBadge) elBadge.textContent='';
-    lockedTrain = null; renderStops(null); setAlarm(false); return;
+    lockedTrain = null; renderStops(null); setAlarm(false); hideSafeMessage(); return;
   }
 
   const events = computeZoneEvents(lastPos, ZONE_RADIUS_M);
@@ -850,9 +899,12 @@ function computeAndRender(){
   if(!next){
     elName.textContent=''; elOfficial.textContent='--:--'; elLive.textContent='';
     if(elBadge) elBadge.textContent='';
-    renderStops(null); setAlarm(false); return;
+    renderStops(null); setAlarm(false);
+    showSafeMessage(lastPos);
+    return;
   }
 
+  hideSafeMessage();
   elName.textContent = next.train.name;
   const liveConfirmed = isTrainLiveConfirmed(next.train);
   const displayTxt = minsToHHMM(Math.round(next.effectiveTimeMin));
