@@ -696,6 +696,10 @@ let announced5MinKey = null;  // مُعرِّف آخر حدث نُطق له تن
 let lockedTrain = null; // القطار المثبّت على الشاشة حتى يصل فعلياً إلى المحطة التالية بعد موقعك
 let manualMode = false; // true إذا كان الموقع محدَّدًا يدويًا من الخريطة بدل GPS الحقيقي
 
+// نفس مفتاح التخزين المستعمل في تطبيق قِطاري الرئيسي — إن كان مُحمَّلاً مسبقاً من هناك (نفس المتصفح/النطاق) نستفيد منه فوراً
+let osmTracks = JSON.parse(localStorage.getItem('qitari_osm_tracks')||'[]'); // [{id,name,coords:[[lat,lon],...]}]
+function saveTracks(){ localStorage.setItem('qitari_osm_tracks', JSON.stringify(osmTracks)); }
+
 // ================= géométrie =================
 function haversine(a,b){
   const R=6371000, toRad=d=>d*Math.PI/180;
@@ -710,6 +714,22 @@ function projectT(p,a,b){
   if(len2===0) return 0;
   let t=((px-ax)*dx+(py-ay)*dy)/len2;
   return Math.max(0,Math.min(1,t));
+}
+// أقرب نقطة على مسار (polyline) حقيقي لسكة حديدية + المسافة التراكمية من بدايته — نفس نموذج المسافة المستعمل في قِطاري الرئيسي
+function nearestOnTrack(pt, coords){
+  let best={dist:Infinity, trackDist:0};
+  let cum=0;
+  for(let i=0;i<coords.length-1;i++){
+    const A=coords[i], B=coords[i+1];
+    const segLen=haversine(A,B);
+    const t = projectT(pt,A,B);
+    const px = A[0]+(B[0]-A[0])*t, py = A[1]+(B[1]-A[1])*t;
+    const d = haversine(pt,[px,py]);
+    if(d<best.dist){ best={dist:d, trackDist: cum + segLen*t}; }
+    cum+=segLen;
+  }
+  best.totalLen=cum;
+  return best;
 }
 function parseStops(stopsText){
   return stopsText.split(',').map(s=>s.trim()).filter(Boolean).map(pair=>{
@@ -829,7 +849,17 @@ function computeZoneEvents(userPos, zoneRadiusM){
   return events;
 }
 // أقرب مسافة إلى أي سكة حديدية (بصرف النظر عن نطاق البحث) — تُستعمل لعرض رسالة الأمان
+// الأولوية لنموذج قِطاري الرئيسي: المسافة الحقيقية إلى مسار السكة الفعلي (خرائط OSM)، وليس تقريباً عبر محطات القطارات فقط
 function nearestRailDistanceM(userPos){
+  if(osmTracks.length>0){
+    let best = null;
+    osmTracks.forEach(track=>{
+      const near = nearestOnTrack(userPos, track.coords);
+      if(best===null || near.dist<best) best = near.dist;
+    });
+    return best;
+  }
+  // احتياطي إن لم تُحمَّل بيانات OSM بعد: نفس المنطق القديم القائم على مقاطع محطات القطارات
   let best = null;
   trains.forEach(train=>{
     const ca = trainClosestApproach(userPos, train);
@@ -1124,13 +1154,45 @@ function computeAndRender(){
 
 // ================= géolocalisation تلقائية بلا أي زر =================
 let lastRealPos = null; // آخر موقع GPS حقيقي مستلَم (يبقى محفوظًا حتى في الوضع اليدوي)
+let osmTracksFetchCenter = JSON.parse(localStorage.getItem('qitari_osm_tracks_center')||'null'); // آخر نقطة حُمِّلت حولها بيانات السكة
+let osmTracksFetching = false; // يمنع تكرار الطلب أثناء انتظار الاستجابة
+const OSM_TRACKS_REFRESH_DIST_M = 10000; // إن تحرّك المستخدم أكثر من 10كم عن آخر نقطة تحميل، نُعيد التحميل تلقائيًا
 if(navigator.geolocation){
   navigator.geolocation.watchPosition(pos=>{
     lastRealPos = [pos.coords.latitude, pos.coords.longitude];
+    // تحميل تلقائي بلا أي تدخل من المستخدم: أول مرة (لا بيانات سكة محفوظة)، أو إن تحرّكنا بعيدًا عن آخر منطقة محمَّلة
+    if(!osmTracksFetching && (osmTracks.length===0 || !osmTracksFetchCenter || haversine(lastRealPos, osmTracksFetchCenter) > OSM_TRACKS_REFRESH_DIST_M)){
+      fetchNearbyRailways(lastRealPos);
+    }
     if(manualMode) return; // تجاهل تحديث الشاشة طالما الموقع محدَّد يدويًا، لكن واصل تتبّع GPS في الخلفية
     lastPos = lastRealPos;
     computeAndRender();
   }, err=>{ console.warn('GPS error', err.message); }, {enableHighAccuracy:true, maximumAge:5000, timeout:15000});
+}
+
+// ================= تحميل مسار السكة الحقيقي من OSM تلقائيًا (نفس نموذج قِطاري الرئيسي) =================
+// لا حاجة لأي زر: يُستدعى تلقائيًا عند أول تحديد GPS، وكلما تحرّك المستخدم بعيدًا كافيًا عن آخر منطقة محمَّلة
+function fetchNearbyRailways(coords){
+  if(osmTracksFetching) return;
+  osmTracksFetching = true;
+  const [lat, lon] = coords;
+  const radius = 15000; // 15 كم
+  const q = `[out:json][timeout:25];way["railway"="rail"](around:${radius},${lat},${lon});out geom;`;
+  fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:q})
+    .then(res=>res.json())
+    .then(data=>{
+      osmTracks = data.elements.filter(e=>e.geometry).map(e=>({
+        id:'osm'+e.id,
+        name:(e.tags && (e.tags.name||e.tags['name:ar'])) || 'خط سكة حديدية',
+        coords: e.geometry.map(g=>[g.lat,g.lon])
+      }));
+      osmTracksFetchCenter = [lat, lon];
+      saveTracks();
+      localStorage.setItem('qitari_osm_tracks_center', JSON.stringify(osmTracksFetchCenter));
+      computeAndRender();
+    })
+    .catch(err=>{ console.warn('OSM tracks fetch failed', err.message); })
+    .finally(()=>{ osmTracksFetching = false; });
 }
 
 // ================= تبديل GPS / تحديد يدوي على الخريطة =================
@@ -1219,6 +1281,9 @@ if(navigator.geolocation){
     updateToggleUI();
     closeOverlay();
     computeAndRender();
+    if(!osmTracksFetching && (osmTracks.length===0 || !osmTracksFetchCenter || haversine(selected, osmTracksFetchCenter) > OSM_TRACKS_REFRESH_DIST_M)){
+      fetchNearbyRailways(selected);
+    }
   });
 
   async function doSearch(){
