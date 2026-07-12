@@ -1228,6 +1228,15 @@ let osmTracksFetching = false; // يمنع تكرار الطلب أثناء ان
 const OSM_TRACKS_REFRESH_DIST_M = 10000; // إن تحرّك المستخدم أكثر من 10كم عن آخر نقطة تحميل، نُعيد التحميل تلقائيًا
 if(navigator.geolocation){
   navigator.geolocation.watchPosition(pos=>{
+    // -------- حارس دقّة GPS --------
+    // إن كانت دقّة القراءة أضعف من نطاق الاكتشاف نفسه (1كم)، فهي غالبًا موقع شبكي تقريبي (IP/WiFi) لا GPS حقيقي،
+    // ويمكن أن تُشير خطأً إلى محطات بعيدة تمامًا (كما حصل مع خط تونس-قبّة رغم وجود المستخدم في نابل).
+    // نتجاهل هذه القراءة كليًا بانتظار إشارة GPS حقيقية أدق، بدل اعتمادها والتسبّب في اكتشاف قطار وهمي.
+    const acc = pos.coords.accuracy;
+    if(acc && acc > ZONE_RADIUS_M){
+      console.warn('دقة GPS ضعيفة جدًا ('+Math.round(acc)+'م) — القراءة متجاهَلة بانتظار إشارة أدق');
+      return;
+    }
     lastRealPos = [pos.coords.latitude, pos.coords.longitude];
     // تحميل تلقائي بلا أي تدخل من المستخدم: أول مرة (لا بيانات سكة محفوظة)، أو إن تحرّكنا بعيدًا عن آخر منطقة محمَّلة
     if(!osmTracksFetching && (osmTracks.length===0 || !osmTracksFetchCenter || haversine(lastRealPos, osmTracksFetchCenter) > OSM_TRACKS_REFRESH_DIST_M)){
@@ -1332,6 +1341,11 @@ function fetchNearbyRailways(coords){
     } else if(navigator.geolocation){
       // لا نتوفر بعد على قراءة GPS: نطلب واحدة فورًا بدل انتظار الحلقة التلقائية
       navigator.geolocation.getCurrentPosition(pos=>{
+        const acc = pos.coords.accuracy;
+        if(acc && acc > ZONE_RADIUS_M){
+          console.warn('دقة GPS ضعيفة جدًا ('+Math.round(acc)+'م) — القراءة متجاهَلة بانتظار إشارة أدق');
+          return;
+        }
         lastRealPos = [pos.coords.latitude, pos.coords.longitude];
         if(!manualMode){ lastPos = lastRealPos; computeAndRender(); }
       }, ()=>{}, {enableHighAccuracy:true, maximumAge:5000, timeout:15000});
