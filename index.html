@@ -834,6 +834,14 @@ function trainClosestApproach(userPos, train){
       best = {dist:d, timeMin: tA + t*(tB-tA), fromStation:stops[i].name, toStation:stops[i+1].name};
     }
   }
+  // -------- تصحيح المسافة بالاعتماد على مسار السكة الحقيقي (OSM) عند توفّره --------
+  // الخط المستقيم بين محطتين متباعدتين (كيلومترات) قد ينحرف عن السكة الحقيقية المتعرّجة بأكثر من 150م،
+  // فتبقى الصفارة معطّلة إلى الأبد حتى لو كان المستخدم واقفًا فعليًا على السكة. نستعمل هنا نفس المسافة
+  // الحقيقية المستعملة في رسالة "منطقة آمنة" (nearestRailDistanceM) بدل التقريب بالخط المستقيم.
+  if(best && osmTracks.length>0){
+    const real = nearestRailDistanceM(userPos);
+    if(real!==null && real<best.dist) best.dist = real;
+  }
   return best;
 }
 function computeZoneEvents(userPos, zoneRadiusM){
