@@ -998,32 +998,84 @@ function getEffectiveTimeMin(train, timeMinRaw){
   return (((timeMinRaw + delay) % 1440) + 1440) % 1440;
 }
 
-// ================= النطق الصوتي بالعربية لمسافة الأمان (لا يوجد قطار على بعد 1كم) =================
+// ================= النطق الصوتي: عربي إن توفّر صوت عربي على الجهاز، وإلا لغة الجهاز نفسها (بدل الصمت الكامل) =================
 let wasSafeState = false;
 let lastSafeSpeakTime = 0;
 const SAFE_SPEAK_INTERVAL_MS = 45000; // إعادة النطق كل 45 ثانية طالما بقي الوضع آمنًا
 
-function speakArabic(text){
+// -------- كشف الأصوات المتوفرة فعليًا على الجهاز --------
+// بعض الأجهزة (خصوصًا أندرويد بلا حزمة صوت عربي) لا تُصدر أي صوت إن طلبنا ar-SA ولا صوت مطابق موجود.
+// نخزّن قائمة الأصوات المتوفرة (تُحمَّل بشكل غير متزامن على بعض المتصفحات، لذا نستمع لـ onvoiceschanged أيضًا).
+let cachedVoices = [];
+function refreshVoices(){ try{ cachedVoices = window.speechSynthesis.getVoices()||[]; }catch(e){ cachedVoices=[]; } }
+if('speechSynthesis' in window){
+  refreshVoices();
+  window.speechSynthesis.onvoiceschanged = refreshVoices;
+}
+const SPEECH_LANG_TAG = {ar:'ar-SA', fr:'fr-FR', en:'en-US', es:'es-ES', de:'de-DE', it:'it-IT', zh:'zh-CN'};
+function pickSpeechLang(){
+  // الأولوية القصوى للعربية إن وُجد صوت عربي فعلي على الجهاز
+  if(cachedVoices.some(v=>/^ar/i.test(v.lang))) return 'ar';
+  // وإلا نعتمد على لغة الجهاز/المتصفح (navigator.language) كحل بديل بدل الصمت الكامل
+  const nav = ((navigator.language||navigator.userLanguage||'en')+'').toLowerCase();
+  const base = nav.split('-')[0];
+  return SPEECH_LANG_TAG[base] ? base : 'en';
+}
+
+const UNIT_WORDS = {
+  ar:{m:'متر', km:'كيلومتر'}, fr:{m:'mètres', km:'kilomètres'}, en:{m:'meters', km:'kilometers'},
+  es:{m:'metros', km:'kilómetros'}, de:{m:'Meter', km:'Kilometer'}, it:{m:'metri', km:'chilometri'},
+  zh:{m:'米', km:'公里'}
+};
+const SPEECH_MSG = {
+  warn5: {
+    ar:'تنبيه، قطار على بعد خمس دقائق منك.',
+    fr:'Attention, un train arrive dans cinq minutes.',
+    en:'Warning, a train is five minutes away.',
+    es:'Atención, un tren llegará en cinco minutos.',
+    de:'Achtung, in fünf Minuten kommt ein Zug.',
+    it:'Attenzione, un treno arriverà in cinque minuti.',
+    zh:'注意,火车五分钟后到达。'
+  },
+  safe: {
+    ar: d=>'أنت على مسافة '+d+' من أقرب سكة حديدية. أنت في أمان. القطارات لا تطير.',
+    fr: d=>'Vous êtes à '+d+' de la voie ferrée la plus proche. Vous êtes en sécurité.',
+    en: d=>'You are '+d+' from the nearest railway. You are safe.',
+    es: d=>'Estás a '+d+' de la vía férrea más cercana. Estás a salvo.',
+    de: d=>'Sie sind '+d+' von der nächsten Bahnstrecke entfernt. Sie sind sicher.',
+    it: d=>'Sei a '+d+' dalla ferrovia più vicina. Sei al sicuro.',
+    zh: d=>'您距离最近的铁路'+d+'。您很安全。'
+  }
+};
+
+function speak(text, lang){
   try{
     if(!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ar-SA';
+    u.lang = SPEECH_LANG_TAG[lang] || 'en-US';
     u.rate = 0.95;
     u.pitch = 1;
     window.speechSynthesis.speak(u);
   }catch(e){}
 }
 
-function distanceSpokenText(distM){
+function distanceSpokenText(distM, lang){
+  const u = UNIT_WORDS[lang] || UNIT_WORDS.en;
   const km = distM/1000;
-  if(km < 1) return Math.round(distM) + ' متر';
-  return (km<10 ? km.toFixed(1) : Math.round(km)) + ' كيلومتر';
+  if(km < 1) return Math.round(distM) + ' ' + u.m;
+  return (km<10 ? km.toFixed(1) : Math.round(km)) + ' ' + u.km;
 }
 
 function announceSafeDistance(distM){
-  const msg = 'أنت على مسافة ' + distanceSpokenText(distM) + ' من أقرب سكة حديدية. أنت في أمان. القطارات لا تطير.';
-  speakArabic(msg);
+  const lang = pickSpeechLang();
+  const d = distanceSpokenText(distM, lang);
+  speak((SPEECH_MSG.safe[lang]||SPEECH_MSG.safe.en)(d), lang);
+}
+
+function announceFiveMinWarning(){
+  const lang = pickSpeechLang();
+  speak(SPEECH_MSG.warn5[lang]||SPEECH_MSG.warn5.en, lang);
 }
 
 function showSafeMessage(userPos){
@@ -1096,7 +1148,16 @@ function computeAndRender(){
     }
   }
   if(!next){
-    const candidate = events.find(e=>e.timeMin>=now);
+    // نستعمل التوقيت الفعّال (المصحَّح بالتأخير الحيّ SNCFT) للمقارنة مع "الآن" — لا التوقيت النظري الخام،
+    // وإلا فقد يُستبعد القطار من الترشّح فورًا إذا كان متأخرًا (توقيته النظري صار في الماضي) حتى لو لم يعبر فعليًا بعد،
+    // وتبقى الصفارة معطّلة نهائيًا لأن lockedTrain لا يُضبط أبدًا.
+    const candidate = events.find(e=>{
+      const eff = getEffectiveTimeMin(e.train, e.timeMin);
+      let diff = eff - now;
+      if(diff < -720) diff += 1440;
+      if(diff > 720) diff -= 1440;
+      return diff >= -1; // هامش دقيقة واحدة يمنع إفلات الحدث بسبب التقريب
+    });
     if(candidate){
       lockedTrain = candidate.train;
       next = {...candidate, effectiveTimeMin:getEffectiveTimeMin(candidate.train, candidate.timeMin)};
@@ -1140,7 +1201,7 @@ function computeAndRender(){
   const VOICE_WARN_LEAD_MIN = 5;
   if(minutesUntilArrival <= VOICE_WARN_LEAD_MIN && minutesUntilArrival > -1 && announced5MinKey !== eventKey){
     announced5MinKey = eventKey;
-    speakArabic('تنبيه، قطار على بعد خمس دقائق منك.');
+    announceFiveMinWarning();
   }
 
   // -------- الصفارة: تشتعل قبل 3 دقائق من توقيت عبور القطار (بشرط القرب من السكة أقل من 150م) --------
