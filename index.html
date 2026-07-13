@@ -1224,7 +1224,12 @@ function computeAndRender(){
   if(eventKey !== currentAlarmKey){
     currentAlarmKey = eventKey;
     alarmDismissed = false; // حدث جديد كليًا: يُسمح للصفارة بالاشتعال من جديد
-    // نُثبِّت لحظة العبور الحقيقية (Date) عند كل حدث جديد، لحساب نافذة "20 دقيقة بعد العبور" عليها
+    alarmExpireAt = null; // لا نثبّت نافذة السماح هنا؛ ستُثبَّت فقط عند اشتعال الصفارة فعليًا (انظر أدناه)
+  }
+
+  // نُثبِّت لحظة العبور الحقيقية (Date) فقط في اللحظة التي تشتعل فيها الصفارة فعليًا (وليس عند مجرد رصد الحدث)،
+  // وإلا فإن alarmExpireAt يصبح دومًا في المستقبل لأي قطار قادم ولو بعد ساعات، فتشتعل الصفارة فورًا من البداية.
+  if(withinAlarmWindow && alarmExpireAt === null){
     alarmExpireAt = minsToDateToday(next.effectiveTimeMin).getTime() + 20*60000;
   }
 
