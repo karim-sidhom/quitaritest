@@ -862,7 +862,6 @@ function nearestRailDistanceM(userPos){
   });
   return trackInfo ? trackInfo.dist : null;
 }
-// الخطر الحقيقي الآن يعتمد على القرب الزمني من لحظة المرور أيضاً، لا على المسافة فقط
 const RISK_TIME_IMMINENT_MIN = 15;
 const RISK_TIME_HORIZON_MIN = 180;
 function timeDecayFactor(minutesUntil){
@@ -1170,9 +1169,13 @@ function computeAndRender(){
   elLive.textContent = '';
   if(elBadge) elBadge.textContent = liveConfirmed ? '🔴 متابعة مباشرة SNCFT' : '';
 
-  // -------- عرض المسافة الحالية إلى السكة (تظهر دائمًا مع أي قطار قادم) --------
+  // -------- عرض المسافة إلى السكة فقط (المسافة الحقيقية إلى مسار السكة الفعلي عبر بيانات OSM) --------
   const elDistance = document.getElementById('trainDistance');
-  if(elDistance) elDistance.textContent = '📍 المسافة إلى السكة: ' + distanceSpokenText(next.dist);
+  if(elDistance){
+    const railDist = nearestRailDistanceM(lastPos);
+    const railTxt = (railDist!==null && railDist!==undefined) ? distanceSpokenText(railDist) : '--';
+    elDistance.textContent = '📍 المسافة إلى السكة: ' + railTxt;
+  }
 
   renderStops(next.train, {fromStation:next.fromStation, toStation:next.toStation, timeMin:next.effectiveTimeMin});
 
