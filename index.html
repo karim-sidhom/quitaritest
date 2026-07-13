@@ -707,6 +707,7 @@ function haversine(a,b){
   const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a[0]))*Math.cos(toRad(b[0]))*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(s));
 }
+// نفس دالة الهندسة المستعملة بالضبط في التطبيق الرئيسي قِطاري — لضمان تطابق نتائج المسافة بين كل تطبيقات المجموعة
 function projectT(p,a,b){
   const ax=a[1],ay=a[0], bx=b[1],by=b[0], px=p[1],py=p[0];
   const dx=bx-ax, dy=by-ay;
@@ -819,7 +820,7 @@ function getLiveDelayForTrain(train){
   return best;
 }
 
-// ================= أقرب اقتراب لكل قطار من موقعك (على كامل مساره اليوم) =================
+// ================= أقرب اقتراب لكل قطار من موقعك (على كامل مساره اليوم) — نفس دالة قِطاري الرئيسي بالضبط =================
 function trainClosestApproach(userPos, train){
   const stops = parseStops(train.stopsText).filter(s=>!s.unknown && s.time);
   if(stops.length<2) return null;
@@ -834,14 +835,9 @@ function trainClosestApproach(userPos, train){
       best = {dist:d, timeMin: tA + t*(tB-tA), fromStation:stops[i].name, toStation:stops[i+1].name};
     }
   }
-  // -------- تصحيح المسافة بالاعتماد على مسار السكة الحقيقي (OSM) عند توفّره --------
-  // الخط المستقيم بين محطتين متباعدتين (كيلومترات) قد ينحرف عن السكة الحقيقية المتعرّجة بأكثر من 150م،
-  // فتبقى الصفارة معطّلة إلى الأبد حتى لو كان المستخدم واقفًا فعليًا على السكة. نستعمل هنا نفس المسافة
-  // الحقيقية المستعملة في رسالة "منطقة آمنة" (nearestRailDistanceM) بدل التقريب بالخط المستقيم.
-  if(best && osmTracks.length>0){
-    const real = nearestRailDistanceM(userPos);
-    if(real!==null && real<best.dist) best.dist = real;
-  }
+  // ملاحظة: على عكس نسخة سابقة، لا يُدمَج هنا أي تصحيح من بيانات OSM. بيانات السكة الحقيقية (osmTracks/nearestOnTrack)
+  // تبقى مستعملة فقط كمعلومة عرض مستقلة (المسافة إلى أقرب سكة، بصرف النظر عن أي قطار) — تمامًا كما في قِطاري الرئيسي،
+  // حيث "أقرب قطار" و"أقرب سكة فعلية" رقمان منفصلان تمامًا ولا يُدمَجان أبدًا في نفس القيمة.
   return best;
 }
 function computeZoneEvents(userPos, zoneRadiusM){
@@ -856,24 +852,15 @@ function computeZoneEvents(userPos, zoneRadiusM){
   events.sort((a,b)=>a.timeMin-b.timeMin);
   return events;
 }
-// أقرب مسافة إلى أي سكة حديدية (بصرف النظر عن نطاق البحث) — تُستعمل لعرض رسالة الأمان
-// الأولوية لنموذج قِطاري الرئيسي: المسافة الحقيقية إلى مسار السكة الفعلي (خرائط OSM)، وليس تقريباً عبر محطات القطارات فقط
+// info visuelle: distance à la voie ferrée la plus proche (OSM), indépendant du risque train
+// -- بلا أي تغيير عن قِطاري الرئيسي: نفس الكتلة حرفياً، وليست دالة مُعاد صياغتها --
 function nearestRailDistanceM(userPos){
-  if(osmTracks.length>0){
-    let best = null;
-    osmTracks.forEach(track=>{
-      const near = nearestOnTrack(userPos, track.coords);
-      if(best===null || near.dist<best) best = near.dist;
-    });
-    return best;
-  }
-  // احتياطي إن لم تُحمَّل بيانات OSM بعد: نفس المنطق القديم القائم على مقاطع محطات القطارات
-  let best = null;
-  trains.forEach(train=>{
-    const ca = trainClosestApproach(userPos, train);
-    if(ca && (best===null || ca.dist<best)) best = ca.dist;
+  let trackInfo=null;
+  osmTracks.forEach(track=>{
+    const near = nearestOnTrack(userPos, track.coords);
+    if(!trackInfo || near.dist<trackInfo.dist) trackInfo={dist:near.dist,name:track.name};
   });
-  return best;
+  return trackInfo ? trackInfo.dist : null;
 }
 // الخطر الحقيقي الآن يعتمد على القرب الزمني من لحظة المرور أيضاً، لا على المسافة فقط
 const RISK_TIME_IMMINENT_MIN = 15;
