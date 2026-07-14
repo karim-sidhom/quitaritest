@@ -179,6 +179,42 @@ body.alarm #trainDistance{ color:#fff; }
   background:#ff8c42; border:2px solid #020b2e; border-radius:50%;
   box-shadow:0 0 4px rgba(0,0,0,.6);
 }
+
+/* ===== الرسم البياني الحي لموقع القطار بين محطتين (يظهر فقط عند وجود قطار قادم) ===== */
+#trainViz{
+  display:none; width:100%; margin-top:1.6vh; flex-shrink:0;
+}
+#trainViz.show{ display:block; }
+#trainViz .vizStationName{
+  font-size:3.2vw; font-weight:700; color:#ffd700; text-align:center; padding:.4vh 0;
+}
+#trainViz .vizStationName.vizTo{ color:#ff8c42; }
+#trainViz .vizTrack{
+  position:relative; height:22vh; margin:.6vh auto; width:70%;
+  min-width:60px;
+}
+#trainViz .vizRail{
+  position:absolute; top:0; bottom:0; right:50%; width:5px; margin-right:-2.5px;
+  background:repeating-linear-gradient(180deg,#8f96b8 0 8px, transparent 8px 14px);
+  border-radius:4px;
+}
+#trainViz .vizDot{
+  position:absolute; right:50%; margin-right:-8px; width:16px; height:16px; border-radius:50%;
+  background:#ffd700; border:2px solid #020b2e; box-shadow:0 0 8px rgba(255,215,0,.6);
+}
+#trainViz .vizDot.vizTop{ top:-8px; }
+#trainViz .vizDot.vizBottom{ bottom:-8px; top:auto; }
+#trainViz .vizUser{
+  position:absolute; right:50%; margin-right:-13px; z-index:5;
+  font-size:22px; line-height:1; transition:top .5s linear;
+  filter:drop-shadow(0 0 6px rgba(124,255,178,.8));
+}
+#trainViz .vizTrain{
+  position:absolute; right:50%; margin-right:-15px; z-index:6;
+  font-size:26px; line-height:1; transition:top .8s linear;
+  filter:drop-shadow(0 0 8px rgba(255,140,66,.8));
+}
+body.alarm #trainViz .vizTrain{ filter:drop-shadow(0 0 12px rgba(255,0,0,.95)); }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 </head>
@@ -191,6 +227,17 @@ body.alarm #trainDistance{ color:#fff; }
     <div id="timeLive"></div>
     <div id="liveBadge"></div>
     <div id="trainDistance"></div>
+    <div id="trainViz">
+      <div class="vizStationName vizFrom" id="vizFromName">—</div>
+      <div class="vizTrack">
+        <div class="vizRail"></div>
+        <div class="vizDot vizTop"></div>
+        <div class="vizDot vizBottom"></div>
+        <div class="vizUser" id="vizUser" style="top:50%;">🧍</div>
+        <div class="vizTrain" id="vizTrain" style="top:0%;">🚆</div>
+      </div>
+      <div class="vizStationName vizTo" id="vizToName">—</div>
+    </div>
     <div id="safeMsg">
       <div class="safeDist" id="safeDist">--</div>
       <div class="safeLine" id="safeLine1">أنت في أمان 🚈</div>
@@ -939,7 +986,7 @@ function trainClosestApproach(userPos, train){
       d = haversineTN(userPos,[px,py]); u = t; // احتياطي: لا يوجد جزء من RAIL_LINES يطابق هذا المقطع بثقة كافية
     }
     if(!best || d<best.dist){
-      best = {dist:d, timeMin: tA + u*(tB-tA), fromStation:stops[i].name, toStation:stops[i+1].name};
+      best = {dist:d, timeMin: tA + u*(tB-tA), fromStation:stops[i].name, toStation:stops[i+1].name, u, tA, tB};
     }
   }
   return best;
@@ -951,7 +998,7 @@ function computeZoneEvents(userPos, zoneRadiusM){
     if(!ca || ca.dist>zoneRadiusM) return;
     const risk = Math.round(Math.max(0, 1-ca.dist/RISK_THRESHOLD_M)*100);
     const timeMin = ((ca.timeMin%1440)+1440)%1440;
-    events.push({train, dist:ca.dist, timeMin, fromStation:ca.fromStation, toStation:ca.toStation, risk});
+    events.push({train, dist:ca.dist, timeMin, fromStation:ca.fromStation, toStation:ca.toStation, risk, u:ca.u, tA:ca.tA, tB:ca.tB});
   });
   events.sort((a,b)=>a.timeMin-b.timeMin);
   return events;
@@ -1093,6 +1140,41 @@ function getEffectiveTimeMin(train, timeMinRaw){
   return (((timeMinRaw + delay) % 1440) + 1440) % 1440;
 }
 
+// ================= الرسم البياني الحي: موقع القطار الحقيقي (بتوقيت الجدول/الحي) وموقعك بين المحطتين =================
+// يعتمد على نفس منطق renderStops: fromStation/toStation/u تأتي من trainClosestApproach، وتوقيت العبور الفعلي (tA/tB) من الجدول + تأخير SNCFT Live إن وُجد
+// السرعة المعروضة هنا هي سرعة القطار الحقيقية (المسافة الفعلية بين المحطتين مقسومة على مدّة الجدول)، بلا أي تسريع
+function hideTrainViz(){
+  const el = document.getElementById('trainViz');
+  if(el) el.classList.remove('show');
+}
+function renderTrainViz(next){
+  const el = document.getElementById('trainViz');
+  if(!el || !next || next.u==null || next.tA==null || next.tB==null) { hideTrainViz(); return; }
+
+  document.getElementById('vizFromName').textContent = next.fromStation || '—';
+  document.getElementById('vizToName').textContent = next.toStation || '—';
+
+  const effTA = getEffectiveTimeMin(next.train, next.tA);
+  const effTB = getEffectiveTimeMin(next.train, next.tB);
+  let duration = effTB - effTA;
+  if(duration < 0) duration += 1440; // عبور منتصف الليل بين المحطتين
+
+  const now = minsNow();
+  let elapsed = now - effTA;
+  if(elapsed < 0) elapsed += 1440;
+
+  let trainFrac = duration > 0 ? (elapsed / duration) : 0;
+  trainFrac = Math.min(1, Math.max(0, trainFrac));
+  const userFrac = Math.min(1, Math.max(0, next.u));
+
+  const vizUser = document.getElementById('vizUser');
+  const vizTrain = document.getElementById('vizTrain');
+  if(vizUser) vizUser.style.top = (userFrac*100) + '%';
+  if(vizTrain) vizTrain.style.top = (trainFrac*100) + '%';
+
+  el.classList.add('show');
+}
+
 // ================= النطق الصوتي بالعربية لمسافة الأمان (لا يوجد قطار على بعد 1كم) =================
 let wasSafeState = false;
 let lastSafeSpeakTime = 0;
@@ -1157,7 +1239,7 @@ function computeAndRender(){
     elName.textContent=''; elOfficial.textContent='--:--'; elLive.textContent='';
     if(elBadge) elBadge.textContent='';
     const elDist0 = document.getElementById('trainDistance'); if(elDist0) elDist0.textContent='';
-    lockedTrain = null; renderStops(null); setAlarm(false); currentAlarmKey = null; alarmDismissed = false; announced5MinKey = null; hideSafeMessage(); return;
+    lockedTrain = null; renderStops(null); setAlarm(false); currentAlarmKey = null; alarmDismissed = false; announced5MinKey = null; hideSafeMessage(); hideTrainViz(); return;
   }
 
   const events = computeZoneEvents(lastPos, ZONE_RADIUS_M);
@@ -1184,7 +1266,7 @@ function computeAndRender(){
         const timeMin = ((ca.timeMin%1440)+1440)%1440;
         const effectiveTimeMin = getEffectiveTimeMin(lockedTrain, timeMin);
         const risk = Math.round(Math.max(0, 1-ca.dist/RISK_THRESHOLD_M)*100);
-        next = {train:lockedTrain, dist:ca.dist, timeMin, effectiveTimeMin, fromStation:ca.fromStation, toStation:ca.toStation, risk};
+        next = {train:lockedTrain, dist:ca.dist, timeMin, effectiveTimeMin, fromStation:ca.fromStation, toStation:ca.toStation, risk, u:ca.u, tA:ca.tA, tB:ca.tB};
       }
     } else {
       lockedTrain = null;
@@ -1205,6 +1287,7 @@ function computeAndRender(){
     renderStops(null); setAlarm(false);
     currentAlarmKey = null; alarmDismissed = false; announced5MinKey = null;
     showSafeMessage(lastPos);
+    hideTrainViz();
     return;
   }
 
@@ -1222,6 +1305,7 @@ function computeAndRender(){
   if(elDistance) elDistance.textContent = '📍 المسافة إلى السكة: ' + distanceSpokenText(next.dist);
 
   renderStops(next.train, {fromStation:next.fromStation, toStation:next.toStation, timeMin:next.effectiveTimeMin});
+  renderTrainViz(next);
 
   // -------- حساب الوقت المتبقي حتى عبور القطار (يُستعمل للصفارة والتنبيه الصوتي) --------
   let minutesUntilArrival = next.effectiveTimeMin - now;
