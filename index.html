@@ -1166,6 +1166,22 @@ function getEffectiveTimeMin(train, timeMinRaw){
   const delay = isTrainLiveConfirmed(train) ? (getLiveDelayForTrain(train) || 0) : 0;
   return (((timeMinRaw + delay) % 1440) + 1440) % 1440;
 }
+// يتحقق عبر SNCFT Live أن هذا القطار بالذات تجاوز فعلاً محطة "toStation" (وصلها أو تخطّاها إلى ما بعدها)
+// يُستعمل لتحرير قفل "أقرب قطار": لا يكفي انقضاء الوقت المجدول (+التأخير)، بل يجب تأكيد SNCFT Live لهذا المقطع تحديداً
+function liveShowsPassedStation(train, toStation){
+  if(!isLiveDataFresh() || !toStation) return false;
+  const stops = parseStops(train.stopsText).filter(s=>!s.unknown && s.time);
+  const toIdx = stops.findIndex(s=>s.name===toStation);
+  if(toIdx===-1) return false;
+  return liveTrains.some(lt=>{
+    if(!trainNumberMatches(train.name, lt.num)) return false;
+    const curIdx = stops.findIndex(s=>stationNamesMatch(s.name, lt.curFr));
+    const nextIdx = stops.findIndex(s=>stationNamesMatch(s.name, lt.nextFr));
+    if(curIdx!==-1 && curIdx>=toIdx) return true; // موقعه الحالي هو المحطة المستهدفة أو بعدها
+    if(nextIdx!==-1 && nextIdx>toIdx) return true; // محطته التالية أبعد من المحطة المستهدفة، أي أنه تجاوزها فعلاً
+    return false;
+  });
+}
 
 // ================= الرسم البياني الحي: موقع القطار الحقيقي (بتوقيت الجدول/الحي) وموقعك بين المحطتين =================
 // يعتمد على نفس منطق renderStops: fromStation/toStation/u تأتي من trainClosestApproach، وتوقيت العبور الفعلي (tA/tB) من الجدول + تأخير SNCFT Live إن وُجد
@@ -1316,13 +1332,28 @@ function computeAndRender(){
       const toStop = stopsL.find(s=>s.name===ca.toStation) || stopsL[stopsL.length-1];
       const toStopTimeMin = minutesOf(toStop.time);
       const effectiveToStopTimeMin = getEffectiveTimeMin(lockedTrain, toStopTimeMin);
-      // القطار "تجاوز" موقعك فقط إذا وصل فعلياً (نظرياً أو حقيقياً) إلى تلك المحطة التالية
+      // انقضاء الوقت المجدول (+التأخير) وحده لا يكفي لتحرير القطار: يبقى معلَّقاً بانتظار تأكيد SNCFT Live
+      // أنه فعلاً بلغ/تجاوز تلك المحطة التالية على هذا المقطع بالذات، إلا إذا ظهر قطار آخر على نفس المقطع بالضبط
       let minutesPastArrival = now - effectiveToStopTimeMin;
       if(minutesPastArrival < -720) minutesPastArrival += 1440; // عبور منتصف الليل
       if(minutesPastArrival > 720) minutesPastArrival -= 1440;
-      const passed = minutesPastArrival >= 0;
-      if(passed){
-        lockedTrain = null;
+      const scheduledPassed = minutesPastArrival >= 0;
+      const liveConfirmedPassed = liveShowsPassedStation(lockedTrain, toStop.name);
+      if(scheduledPassed && liveConfirmedPassed){
+        lockedTrain = null; // مؤكَّد فعلياً عبر SNCFT Live أنه تجاوز المحطة — يتحرر القفل الآن
+      } else if(scheduledPassed && !liveConfirmedPassed){
+        const nextOnSameSegment = events.find(e => e.train!==lockedTrain && e.fromStation===ca.fromStation && e.toStation===ca.toStation && e.timeMin>=now);
+        if(nextOnSameSegment){
+          // قطار آخر جاهز على نفس المقطع تماماً — ننتقل إليه بدل الانتظار إلى ما لا نهاية
+          lockedTrain = nextOnSameSegment.train;
+          next = {...nextOnSameSegment, effectiveTimeMin:getEffectiveTimeMin(nextOnSameSegment.train, nextOnSameSegment.timeMin)};
+        } else {
+          // يبقى معلّقاً كما هو رغم تجاوز الوقت المجدول، بانتظار تأكيد SNCFT Live لهذا المقطع أو ظهور قطار آخر عليه
+          const timeMin = ((ca.timeMin%1440)+1440)%1440;
+          const effectiveTimeMin = getEffectiveTimeMin(lockedTrain, timeMin);
+          const risk = Math.round(Math.max(0, 1-ca.dist/RISK_THRESHOLD_M)*100);
+          next = {train:lockedTrain, dist:ca.dist, timeMin, effectiveTimeMin, fromStation:ca.fromStation, toStation:ca.toStation, risk, u:ca.u, tA:ca.tA, tB:ca.tB};
+        }
       } else {
         const timeMin = ((ca.timeMin%1440)+1440)%1440;
         const effectiveTimeMin = getEffectiveTimeMin(lockedTrain, timeMin);
