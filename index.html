@@ -860,8 +860,6 @@ body{
 </style>
 </head>
 <body>
-<button class="btn secondary" id="gpsOffBtn" style="position:fixed;top:8px;left:8px;width:auto;margin:0;padding:8px 12px;font-size:12px;z-index:2147482999;background:rgba(0,0,0,.75);border:1px solid var(--gold);color:var(--gold);">📴 إيقاف GPS (وضع العرض)</button>
-
 <div id="legalNoticeOverlay" role="dialog" aria-modal="true">
   <div class="ln-box">
     <h1>AVIS JURIDIQUE ET LIMITATION DE RESPONSABILITÉ — SYSTÈME DE SÉCURITÉ FERROVIAIRE</h1>
@@ -972,6 +970,12 @@ body{
     <div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>
     <div class="title">قِطَاري</div>
     <div class="subtitle">كاشف خطر تقاطع السكة الحديدية · تونس</div>
+    <a id="qitariDownloadApk" href="Qitari-release_1.apk" download="Qitari-release_1.apk"
+       style="display:inline-flex;align-items:center;justify-content:center;gap:8px;margin:10px auto 4px;padding:12px 28px;border-radius:30px;
+       border:1px solid rgba(255,215,0,.7);background:linear-gradient(135deg,#d4af37,#b8901f);color:#1a1000;font-weight:800;font-size:16px;
+       text-decoration:none;box-shadow:0 4px 14px rgba(0,0,0,.45);font-family:'Tajawal','Cairo',sans-serif;direction:ltr;cursor:pointer;position:relative;z-index:5;">
+      <span aria-hidden="true">⬇</span><span>Télécharger</span>
+    </a>
     <div id="updateStampsWrap">
       <div class="stamp-tool tool1">
         <svg viewBox="0 0 96 150" xmlns="http://www.w3.org/2000/svg">
@@ -1071,15 +1075,6 @@ body{
     <div class="wood-frame" id="humidFrame"><span class="wf-icon">💧</span><span class="wf-value" id="humidFrameVal">--%</span><span class="wf-label">رطوبة</span></div>
   </div>
   <div class="shimmer"></div>
-
-  <div id="apkDownloadBox" style="margin:14px 0;text-align:center;">
-    <a id="apkDownloadBtn" href="Qitari-release.apk" download="Qitari-release.apk"
-       style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;box-sizing:border-box;padding:16px 18px;border-radius:14px;text-decoration:none;
-       background:linear-gradient(135deg,var(--gold),var(--gold2));color:var(--navy-deep);font-family:'Tajawal',sans-serif;font-weight:800;font-size:18px;
-       box-shadow:0 4px 16px rgba(0,0,0,.45);">
-      <span style="font-size:22px;">⬇️</span><span>تحميل تطبيق قِطَاري (APK) للأندرويد</span>
-    </a>
-  </div>
 
   <div class="card vintage-radio-card" id="vintageRadioCard">
     <h3>📻 إذاعتي</h3>
@@ -1545,7 +1540,7 @@ var RADIO_TRACKS = [
       </div>
     </div>
     </div>
-        <button class="btn" id="startBtn">▶️ تشغيل المراقبة</button>
+    <button class="btn" id="startBtn">▶️ تشغيل المراقبة</button>
   </div>
 
   <div class="card" id="mapCard">
@@ -7036,14 +7031,8 @@ document.getElementById('startBtn').onclick = startWatch;
     });
   }
 })();
-let gpsOffMode=false; // وضع العرض: GPS موقوف يدوياً (لا إنذار)
-function gpsOffUpdateBtn(){
-  const b=document.getElementById('gpsOffBtn');
-  if(b) b.textContent = gpsOffMode ? '📡 تشغيل GPS' : '📴 إيقاف GPS (وضع العرض)';
-}
 function startWatch(){
   if(!navigator.geolocation){ alert('الموقع الجغرافي غير مدعوم'); return; }
-  gpsOffMode=false; gpsOffUpdateBtn();
   unlockAudio();
   requestWakeLock();
   requestNotifPermission();
@@ -7063,54 +7052,6 @@ function stopWatch(){
   releaseWakeLock();
   stopKeepAlive();
 }
-// وضع العرض: يوقف GPS تماماً ويُسكت كل الإنذارات. بدون موقع (lastPos=null) كل وحدات الإنذار تتوقف وتبقى ساكنة.
-function gpsOff(){
-  gpsOffMode=true;
-  stopWatch();
-  try{ if(slOwnWatchId!==null){ navigator.geolocation.clearWatch(slOwnWatchId); slOwnWatchId=null; } }catch(e){}
-  lastPos=null;
-  try{ if(map && userMarker){ map.removeLayer(userMarker); userMarker=null; } }catch(e){}
-  // نصفّر المسافات القصوى حتى لا ينطق التطبيق جملة "مرّ القطار" عند الإسكات
-  try{ alarmMinDistSeen=Infinity; liveAlarmMinDistSeen=Infinity; }catch(e){}
-  try{ forceStopAlarm(); }catch(e){}
-  try{ forceStopLiveAlarm(); }catch(e){}
-  try{ forceStopSegAlarm(); }catch(e){}
-  try{ forceStopRailTheoAlarm(); }catch(e){}
-  try{ forceStopSegStationAlarm(); }catch(e){}
-  try{ forceStopTerminatorAlarm(); }catch(e){}
-  try{ forceStopTrainDist1kmAlarm(); }catch(e){}
-  try{ statusStopThreeMinAlarm(); }catch(e){}
-  try{ segTrCardAlarm_stop(); }catch(e){}
-  try{ stopSiren(); }catch(e){}
-  try{ if(typeof kzAlarmActive!=='undefined' && kzAlarmActive) kz_setAlarm(false); }catch(e){}
-  try{ if(typeof kzLAlarmActive!=='undefined' && kzLAlarmActive) kzL_setAlarm(false); }catch(e){}
-  try{ updateTrafficLights(0); }catch(e){}
-  // تصفير كل الأرقام والمعلومات المعروضة (المسافات، القطارات، الخط الزمني...) إلى حالتها الابتدائية
-  try{ kzL_computeAndRender(); }catch(e){}
-  try{
-    kzLockedTrain=null; kzPassageConfirmedAt=null; kz_renderStops(null); kz_setAlarm(false);
-    kzCurrentAlarmKey=null; kzAlarmDismissed=false; kzAnnounced5MinKey=null; kzFrh2minKey=null; kzFrh90sKey=null; stopFinalCountdown();
-    kz_hideSafeMessage(); kz_hideTrainViz(); kz_hideGhostBox('kz');
-  }catch(e){}
-  gpsOffRestoreUi();
-  try{ redendentia_render(); }catch(e){}
-  document.getElementById('gpsAcc').textContent='--';
-  document.getElementById('speedNow').textContent='--';
-  document.getElementById('startBtn').style.display='none';
-  gpsOffUpdateBtn();
-}
-const GPS_OFF_UI_IDS=['binocularDestination','binocularElsewhereNote','binocularLastStation','binocularSeenSince','binocularSeenTime','binocularTheoLocation','binocularTrainNum',
-  'catchTrainNote','distTrack','distTrain','nearLine','nearTrack','nearTrainAllStops','nearTrainArr','nearTrainCurPos','nearTrainDep','nearTrainNum','neverCloseNote',
-  'safeTimeZone','segmentSafeInfo','statusQuickSummary','trainDirection','userBetweenStations','ot2Num','ot2Dep','ot2Arr','ot2Dist','ot3Num','ot3Dep','ot3Arr','ot3Dist',
-  'theoHeroDetail','theoHeroDot','theoHeroNum','theoHeroTitle','riskFill','riskLabel','scheduleNote','scheduleStrip',
-  'segTrCardLineStops','segTrCardPositionText','segTrCardVizFromName','segTrCardVizToName','segTrCardVizUser','segmentTrainsList',
-  'kzTrainName','kzTimeOfficial','kzLiveBadge','kzTrainDistance','kzTheoLineViz','kzLiveLineViz'];
-const gpsOffUiInit={};
-GPS_OFF_UI_IDS.forEach(function(id){ const e=document.getElementById(id); if(e) gpsOffUiInit[id]={h:e.innerHTML,s:e.style.cssText,c:e.className}; });
-function gpsOffRestoreUi(){
-  GPS_OFF_UI_IDS.forEach(function(id){ const e=document.getElementById(id), i=gpsOffUiInit[id]; if(e&&i){ e.innerHTML=i.h; e.style.cssText=i.s; e.className=i.c; } });
-}
-document.getElementById('gpsOffBtn').onclick = function(){ if(gpsOffMode) startWatch(); else gpsOff(); };
 function onPos(pos){
   const {latitude,longitude,accuracy,speed}=pos.coords;
   lastPos=[latitude,longitude];
