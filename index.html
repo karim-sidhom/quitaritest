@@ -39,6 +39,10 @@ html,body{margin:0;height:100%;background:#0d1a6e;font-family:system-ui,sans-ser
 #hist b{color:#d4af37}#hist .hh{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
 #hist button{background:#d4af37;color:#0d1a6e;border:0;border-radius:6px;padding:2px 8px;font-weight:700;cursor:pointer}
 #hist .hsub{opacity:.85;margin-bottom:6px}
+#hrep{position:fixed;inset:0;z-index:2000;background:#000a;display:none;align-items:center;justify-content:center;direction:rtl}
+#hrep .bx{background:#020b2e;border:1px solid #d4af37;border-radius:12px;padding:12px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#fff}
+#hrep pre{white-space:pre-wrap;overflow:auto;font:13px/1.6 system-ui,sans-serif;margin:8px 0;flex:1;text-align:right}
+#hrep button{background:#d4af37;color:#0d1a6e;border:0;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer;margin-inline-end:6px}
 #hist .hchart{display:flex;gap:1px;align-items:flex-end;margin:6px 0 10px}
 #hist .hc{flex:1;min-width:0;text-align:center;font-size:8px}
 #hist .hb{height:70px;display:flex;gap:2px;align-items:flex-end;justify-content:center;border-bottom:1px solid #d4af37}
@@ -63,6 +67,7 @@ i.addEventListener('keydown',function(ev){ if(ev.key==='Enter') go(); });
 <div id="map"></div>
 <div id="risk" class="risk-panel" style="display:none"></div>
 <div id="hist"></div>
+<div id="hrep"><div class="bx"><pre id="hrept"></pre><div><button id="hrcp">📋</button><button id="hrdl">⬇ .txt</button><button id="hrx">✖</button></div></div></div>
 <div id="bar"><span>👥 <span id="cnt">0</span></span><span>🚆 <span id="tcnt">0</span></span>
 <select id="win"><option value="3">آخر 3 د</option><option value="10" selected>آخر 10 د</option><option value="60">آخر ساعة</option><option value="1440">آخر 24 ساعة</option><option value="10080">آخر 7 أيام</option><option value="43200">آخر 30 يوماً</option></select>
 <button id="sat">🛰️</button><button id="hbtn">📈</button><span id="st"></span></div>
@@ -1239,7 +1244,9 @@ function histAggregate(rows){
     var dk=hDayKey(t), key=u.device_id||('r'+u.id);
     if(!dayUsers[dk]) return;
     dayUsers[dk][key]=1;
-    var d=devs[key]||(devs[key]={key:key,name:u.device||key,first:t,last:t,n:0,alarms:0,perDay:{},pts:[]});
+    var d=devs[key]||(devs[key]={key:key,name:u.device||key,os:'',browser:'',first:t,last:t,n:0,alarms:0,perDay:{},perFirst:{},perLast:{},perAl:{},alEv:[],pts:[]});
+    if(u.os) d.os=u.os; if(u.browser) d.browser=u.browser;
+    if(!d.perFirst[dk]||t<d.perFirst[dk]) d.perFirst[dk]=t; if(!d.perLast[dk]||t>d.perLast[dk]) d.perLast[dk]=t;
     if(t<d.first) d.first=t; if(t>d.last) d.last=t;
     d.n++; d.perDay[dk]=(d.perDay[dk]||0)+1;
     if(u.device) d.name=u.device;
@@ -1247,7 +1254,7 @@ function histAggregate(rows){
     if(u.lat!=null&&u.lon!=null) d.pts.push({t:t,lat:u.lat,lon:u.lon,al:isAl});
     if(isAl){
       /* نفس الإنذار المتواصل (فارق ≤3 د بين سجلّين) يُحسب مرة واحدة */
-      if(!lastAl[key] || t-lastAl[key]>180000){ dayAlarms[dk]++; d.alarms++; events.push({t:t,key:key,name:d.name,lat:u.lat,lon:u.lon}); }
+      if(!lastAl[key] || t-lastAl[key]>180000){ dayAlarms[dk]++; d.alarms++; d.perAl[dk]=(d.perAl[dk]||0)+1; d.alEv.push({t:t,lat:u.lat,lon:u.lon}); events.push({t:t,key:key,name:d.name,lat:u.lat,lon:u.lon}); }
       lastAl[key]=t;
     }
   });
@@ -1258,7 +1265,7 @@ function histAggregate(rows){
 async function histFetch(setP){
   var since=new Date(Date.now()-HIST_DAYS*864e5).toISOString(), out=[], off=0, PAGE=1000, MAXP=600;
   for(var p=0;p<MAXP;p++){
-    var r=await fetch(SUPABASE_URL+'/rest/v1/qitari_users?select=id,device_id,device,lat,lon,alarm,created_at&created_at=gte.'+encodeURIComponent(since)+'&order=created_at.asc&limit='+PAGE+'&offset='+off,{headers:{apikey:SUPABASE_KEY}});
+    var r=await fetch(SUPABASE_URL+'/rest/v1/qitari_users?select=id,device_id,device,os,browser,lat,lon,alarm,created_at&created_at=gte.'+encodeURIComponent(since)+'&order=created_at.asc&limit='+PAGE+'&offset='+off,{headers:{apikey:SUPABASE_KEY}});
     if(!r.ok) throw new Error('HTTP '+r.status);
     var part=await r.json();
     out=out.concat(part); off+=part.length;
@@ -1270,7 +1277,7 @@ async function histFetch(setP){
 function histRender(){
   var el=document.getElementById('hist'), D=histData;
   var maxU=1; D.days.forEach(function(k){ maxU=Math.max(maxU,Object.keys(D.dayUsers[k]).length,D.dayAlarms[k]); });
-  var h='<div class="hh"><b>📈 آخر 30 يوماً</b><span><button id="hrf">↻</button> <button id="hclr">🧹</button> <button id="hx">✖</button></span></div>';
+  var h='<div class="hh"><b>📈 آخر 30 يوماً</b><span><button id="hall">📄⬇</button> <button id="hrf">↻</button> <button id="hclr">🧹</button> <button id="hx">✖</button></span></div>';
   h+='<div class="hsub">👥 '+D.devs.length+' · 🔔 '+D.events.length+' · '+histRows.length+' سجلّ</div>';
   h+='<div class="hchart">';
   D.days.forEach(function(k){
@@ -1283,7 +1290,7 @@ function histRender(){
   D.events.slice(0,200).forEach(function(e,i){ h+='<div class="hr hl" data-ev="'+i+'">🔔 '+hFmt(e.t)+' · '+esc(e.name)+'</div>'; });
   h+='<b>👤 المستخدمون</b>';
   D.devs.forEach(function(d,i){
-    h+='<div class="hr hl" data-dv="'+i+'"><b>'+esc(d.name)+'</b> · '+hFmt(d.first)+' → '+hFmt(d.last)+' · '+d.n+' · 🔔'+d.alarms+'<div class="hdays">';
+    h+='<div class="hr hl" data-dv="'+i+'"><button class="hrep" data-rp="'+i+'">📄</button> <b>'+esc(d.name)+'</b> · '+hFmt(d.first)+' → '+hFmt(d.last)+' · '+d.n+' · 🔔'+d.alarms+'<div class="hdays">';
     D.days.forEach(function(k){ var c=d.perDay[k]||0; h+='<span class="'+(c?'on':'')+'" title="'+k+'">'+c+'</span>'; });
     h+='</div></div>';
   });
@@ -1293,6 +1300,51 @@ function histRender(){
   document.getElementById('hrf').onclick=function(){ histOpen(true); };
   Array.prototype.forEach.call(el.querySelectorAll('[data-ev]'),function(n){ n.onclick=function(){ var e=D.events[+n.getAttribute('data-ev')]; if(e&&e.lat!=null){ map.setView([e.lat,e.lon],16); L.popup().setLatLng([e.lat,e.lon]).setContent('🔔 '+esc(hFmt(e.t))+'<br>'+esc(e.name)).openOn(map); } }; });
   Array.prototype.forEach.call(el.querySelectorAll('[data-dv]'),function(n){ n.onclick=function(){ histTrail(D.devs[+n.getAttribute('data-dv')]); }; });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-rp]'),function(n){ n.onclick=function(ev){ ev.stopPropagation(); histShowReport(D.devs[+n.getAttribute('data-rp')]); }; });
+  document.getElementById('hall').onclick=function(){ var t=D.devs.map(histReportText).join('\n\n'+'='.repeat(40)+'\n\n'); histDownload('qitari-rapports-'+hDayKey(Date.now())+'.txt',t); };
+}
+
+function hFull(t){ var d=new Date(t); return hDayKey(t)+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function hHM(t){ var d=new Date(t); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function histReportText(d){
+  var D=histData, L=[];
+  L.push('تقرير الهاتف (Rapport du téléphone)');
+  L.push('الجهاز (Appareil): '+d.name);
+  L.push('المعرّف (ID): '+d.key);
+  L.push('النظام / المتصفح (OS / navigateur): '+(d.os||'—')+' · '+(d.browser||'—'));
+  L.push('الفترة المدروسة: '+D.days[0]+' → '+D.days[D.days.length-1]);
+  L.push('أول ظهور (1ère apparition): '+hFull(d.first));
+  L.push('آخر ظهور (dernière apparition): '+hFull(d.last));
+  var act=D.days.filter(function(k){return d.perDay[k]}).length;
+  L.push('الأيام النشطة (jours actifs): '+act+' / '+D.days.length);
+  L.push('عدد النقاط المسجَّلة (points): '+d.n);
+  L.push('عدد الإنذارات التي رنّت (alarmes): '+d.alarms);
+  var lp=d.pts.length?d.pts[d.pts.length-1]:null;
+  if(lp) L.push('آخر موقع (dernière position): '+lp.lat.toFixed(6)+', '+lp.lon.toFixed(6)+' — '+hFull(lp.t));
+  L.push('');
+  L.push('التفصيل اليومي (détail par jour):');
+  D.days.forEach(function(k){
+    if(!d.perDay[k]) return;
+    L.push(' • '+k+' : '+d.perDay[k]+' نقطة، من '+hHM(d.perFirst[k])+' إلى '+hHM(d.perLast[k])+(d.perAl[k]?' ، 🔔 '+d.perAl[k]+' إنذار':''));
+  });
+  L.push('');
+  L.push('الإنذارات (alarmes):');
+  if(!d.alEv.length) L.push(' — لا شيء (aucune)');
+  d.alEv.forEach(function(e){ L.push(' 🔔 '+hFull(e.t)+(e.lat!=null?' — '+e.lat.toFixed(6)+', '+e.lon.toFixed(6):'')); });
+  return L.join('\n');
+}
+function histDownload(name,text){
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['\ufeff'+text],{type:'text/plain;charset=utf-8'}));
+  a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1000);
+}
+function histShowReport(d){
+  var txt=histReportText(d), box=document.getElementById('hrep');
+  document.getElementById('hrept').textContent=txt; box.style.display='flex';
+  document.getElementById('hrx').onclick=function(){ box.style.display='none'; };
+  document.getElementById('hrdl').onclick=function(){ histDownload('rapport-'+String(d.name).replace(/[^\w\u0600-\u06FF-]+/g,'_')+'.txt',txt); };
+  document.getElementById('hrcp').onclick=function(){ try{ navigator.clipboard.writeText(txt); }catch(e){} };
 }
 function histTrail(d){
   histLayer.clearLayers();
