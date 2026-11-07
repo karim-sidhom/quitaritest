@@ -853,9 +853,9 @@ function bearingBetween(a,b){
   return (toDeg(Math.atan2(y,x))+360)%360;
 }
 const RISK_THRESHOLD_M = 150;
-function todayAt(hhmm){
+function todayAt(hhmm,atMs){
   const [h,m]=hhmm.split(':').map(Number);
-  const now=new Date();
+  const now=atMs!=null?new Date(atMs):new Date();
   return new Date(now.getFullYear(),now.getMonth(),now.getDate(),h,m,0);
 }
 function getLiveDelayForTrain(train){
@@ -879,18 +879,18 @@ function getLiveDelayForTrain(train){
   });
   return best;
 }
-function trainPositionNow(train){
-  const r = trainPositionNowRaw(train);
+function trainPositionNow(train,atMs){
+  const r = trainPositionNowRaw(train,atMs);
   if(!r) return null;
   const s = snapToNearestTrack(r.lat, r.lon, 3000);
   return Object.assign({}, r, {lat:s.lat, lon:s.lon});
 }
-function trainPositionNowRaw(train){
+function trainPositionNowRaw(train,atMs){
   const stops = parseStops(train.stopsText).filter(s=>!s.unknown && s.time);
   if(stops.length<2) return null;
-  const delayMin = getLiveDelayForTrain(train) || 0;
-  const now = new Date(Date.now() - delayMin*60000); // القطار المتأخر بـD دقائق هو فعلياً حيث كان يجب أن يكون قبل D دقائق حسب الجدول
-  const times = stops.map(s=>todayAt(s.time));
+  const delayMin = atMs!=null ? 0 : (getLiveDelayForTrain(train) || 0);
+  const now = new Date((atMs!=null?atMs:Date.now()) - delayMin*60000); // القطار المتأخر بـD دقائق هو فعلياً حيث كان يجب أن يكون قبل D دقائق حسب الجدول
+  const times = stops.map(s=>todayAt(s.time,atMs));
   const t = now.getTime();
   // لا نتوقف عن إعطاء موقع تقديري أبداً ما دام القطار مؤكداً فعلياً عبر SNCFT Live — الأفضل تقدير تقريبي (أقرب محطة) من إخفاء القطار تماماً بسبب تأخير كبير لم يُكتشف رقمياً
   for(let i=0;i<stops.length-1;i++){
@@ -996,17 +996,18 @@ function kz_getTrackSubPath(A, B, nameA, nameB){
   return result;
 }
 var INACTIVE_MARGIN=20;
-function inService(t){
+function inService(t,atMs){
   var stops=parseStops(t.stopsText).filter(function(s){return !s.unknown&&s.time});
   if(stops.length<2) return false;
-  var now=Date.now(), a=todayAt(stops[0].time).getTime(), b=todayAt(stops[stops.length-1].time).getTime();
-  var d=getLiveDelayForTrain(t)||0;
+  var now=atMs!=null?atMs:Date.now(), a=todayAt(stops[0].time,atMs).getTime(), b=todayAt(stops[stops.length-1].time,atMs).getTime();
+  var d=atMs!=null?0:(getLiveDelayForTrain(t)||0);
   return now>=a-INACTIVE_MARGIN*60000 && now<=b+(d+INACTIVE_MARGIN)*60000;
 }
 return {
   OFFICIAL:SNCFT_OFFICIAL_TRACKS, setOsm:function(a){ osmTracks=Array.isArray(a)?a:[]; }, RAIL_LINES:RAIL_LINES, haversine:haversine, THR:RISK_THRESHOLD_M,
   setLive:function(data){ liveTrains=Array.isArray(data)?data:[]; liveFetchOk=true; liveFetchAt=Date.now(); updateLiveOnlyHistory(); },
   setLiveFailed:function(){ liveFetchOk=false; },
+  scheduledAt:function(ms){ var out=[]; trains.forEach(function(t){ if(!inService(t,ms)) return; var p=trainPositionNow(t,ms); if(!p) return; out.push({t:t,p:p}); }); return out; },
   scheduled:function(){ var out=[]; trains.forEach(function(t){ if(!inService(t)) return; var p=trainPositionNow(t); if(!p) return; var st=parseStops(t.stopsText); out.push({t:t,p:p,confirmed:isTrainLiveConfirmed(t),from:st[0].name,to:st[st.length-1].name}); }); return out; },
   liveOnly:function(){ var out=[]; liveOnlyEntries().forEach(function(lt){ var p=liveOnlyTrainPosition(lt); if(p) out.push({lt:lt,p:p}); }); return out; },
   icon:trainIconSvg,
@@ -1287,7 +1288,7 @@ function histRender(){
   h+='</div>';
   h+='<b>🔔 الإنذارات</b>';
   if(!D.events.length) h+='<div class="hr">—</div>';
-  D.events.slice(0,200).forEach(function(e,i){ h+='<div class="hr hl" data-ev="'+i+'">🔔 '+hFmt(e.t)+' · '+esc(e.name)+'</div>'; });
+  D.events.slice(0,200).forEach(function(e,i){ h+='<div class="hr hl" data-ev="'+i+'">🔔 '+hFmt(e.t)+' · '+esc(e.name)+esc(histTrainTxt(e))+'</div>'; });
   h+='<b>👤 المستخدمون</b>';
   D.devs.forEach(function(d,i){
     h+='<div class="hr hl" data-dv="'+i+'"><button class="hrep" data-rp="'+i+'">📄</button> <b>'+esc(d.name)+'</b> · '+hFmt(d.first)+' → '+hFmt(d.last)+' · '+d.n+' · 🔔'+d.alarms+'<div class="hdays">';
@@ -1306,6 +1307,13 @@ function histRender(){
 
 function hFull(t){ var d=new Date(t); return hDayKey(t)+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
 function hHM(t){ var d=new Date(t); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function histTrainAt(e){
+  if(e.trn!==undefined) return e.trn;
+  var best=null;
+  try{ if(e.lat!=null) QT.scheduledAt(e.t).forEach(function(x){ var dd=QT.haversine([e.lat,e.lon],[x.p.lat,x.p.lon]); if(!best||dd<best.d) best={id:x.t.name.split('—')[0].trim(),d:dd}; }); }catch(er){}
+  return e.trn=best;
+}
+function histTrainTxt(e){ var b=histTrainAt(e); return b?(' — القطار المقدَّر (train estimé): '+b.id+' ('+Math.round(b.d)+' م)'):' — لا قطار مجدول (aucun train au programme)'; }
 function histReportText(d){
   var D=histData, L=[];
   L.push('تقرير الهاتف (Rapport du téléphone)');
@@ -1330,7 +1338,7 @@ function histReportText(d){
   L.push('');
   L.push('الإنذارات (alarmes):');
   if(!d.alEv.length) L.push(' — لا شيء (aucune)');
-  d.alEv.forEach(function(e){ L.push(' 🔔 '+hFull(e.t)+(e.lat!=null?' — '+e.lat.toFixed(6)+', '+e.lon.toFixed(6):'')); });
+  d.alEv.forEach(function(e){ L.push(' 🔔 '+hFull(e.t)+(e.lat!=null?' — '+e.lat.toFixed(6)+', '+e.lon.toFixed(6):'')+histTrainTxt(e)); });
   return L.join('\n');
 }
 function histDownload(name,text){
